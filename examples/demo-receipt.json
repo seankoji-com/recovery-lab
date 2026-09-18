@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "run_id": "rl-f9e255eb9e704834805c786cdc51f5ec",
+  "started_at": "2026-09-18T23:07:25.943309+00:00",
+  "status": "passed",
+  "phases": [
+    {
+      "name": "validate",
+      "passed": true,
+      "seconds": 0.0
+    },
+    {
+      "name": "retrieve_and_decrypt",
+      "passed": true,
+      "seconds": 2.998
+    },
+    {
+      "name": "isolate",
+      "passed": true,
+      "seconds": 6.8
+    },
+    {
+      "name": "restore",
+      "passed": true,
+      "seconds": 0.13
+    },
+    {
+      "name": "database_acceptance",
+      "passed": true,
+      "seconds": 0.06
+    },
+    {
+      "name": "browser_acceptance",
+      "passed": true,
+      "seconds": 15.108
+    },
+    {
+      "name": "cleanup",
+      "passed": true,
+      "seconds": 1.98
+    }
+  ],
+  "snapshot": "eff425af3584741cc6f451712430a862615906904931da2d7cedee378f81a2ab",
+  "capture_started_at": "2026-09-18T23:07:07.516766+00:00",
+  "recoverable_data_age_seconds": 20.115,
+  "dump_sha256": "4a76b773bd387e5fd87ee555a3eccc69141966e678d1657297a15a53dfbb4573",
+  "images": {
+    "postgres:16.10-alpine": "sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297",
+    "restic/restic:0.18.1": "sha256:39d9072fb5651c80d75c7a811612eb60b4c06b32ffe87c2e9f3c7222e1797e76",
+    "recovery-lab-notes:0.1.0": "sha256:570be01fe60384631ebe29d9c4df79584280f76304e759f63adeabf16514cb8f",
+    "recovery-lab-browser:0.1.0": "sha256:3f217f45eeb4ab5f05968d02bdd363e482027890fd7654bde4b4a73ee2bc4ddb"
+  },
+  "browser": {
+    "engine": "chromium",
+    "http_status": 200,
+    "journey": "list -> note -> exact restored body",
+    "passed": true
+  },
+  "recovery_seconds": 25.097,
+  "cleanup": {
+    "container": true,
+    "volume": true,
+    "network": true,
+    "plaintext_directory": true
+  },
+  "finished_at": "2026-09-18T23:07:53.020118+00:00",
+  "total_seconds": 27.077,
+  "demo": {
+    "source_browser_passed": true,
+    "fault": "drop source notes table",
+    "broken_source_http_status": 503,
+    "source_cleanup": {
+      "container": true,
+      "volume": true,
+      "network": true
+    }
+  }
+}

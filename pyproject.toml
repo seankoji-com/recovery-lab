@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recovery-lab"
+version = "0.1.0"
+description = "Prove an encrypted PostgreSQL backup restores to a usable application"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+recovery-lab = "recovery_lab.cli:main"
+
+[tool.setuptools.package-data]
+recovery_lab = ["app/*"]
+
+[tool.setuptools.packages.find]
+include = ["recovery_lab*"]
