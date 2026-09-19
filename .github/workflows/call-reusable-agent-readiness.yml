@@ -1,0 +1,26 @@
+# Agent Readiness — synced from seankoji-com/.github (panel/call-reusable-agent-readiness.yml)
+# Ratchet on agentic token cost: reports what a PR makes worse — a new
+# CLAUDE.md/AGENTS.md split, a file pushed over the line limit, a doc or
+# .claude/ command now pointing at a missing path. Existing debt never fails.
+# Advisory unless this repo's .agent-readiness.json sets "enforce": true.
+# Standard, check list, and config: seankoji-com/.github docs/agent-readiness.md
+name: Agent Readiness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-readiness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agent-readiness:
+    # Fork heads do not run on the organization runner.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: seankoji-com/.github/.github/workflows/reusable-agent-readiness.yml@main
+    with:
+      runner-json: '["ubuntu-latest"]'
