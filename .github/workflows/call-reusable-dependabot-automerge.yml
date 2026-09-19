@@ -1,0 +1,36 @@
+# Dependabot Auto-Merge — synced from seankoji-com/.github (panel/call-reusable-dependabot-automerge.yml)
+# Enables auto-merge for dependabot PRs after CI + reviews pass.
+# Major version bumps are excluded (require human approval).
+# Uses the org-wide SEANKOJI_CI_APP_ID / SEANKOJI_CI_PRIVATE_KEY App identity
+# (Contents:Write and PullRequests:Write) — no per-repo secrets required.
+name: Dependabot Auto-Merge
+
+# Trigger is pull_request_target, NOT pull_request. Dependabot-triggered
+# `pull_request` runs get a read-only GITHUB_TOKEN and cannot read Actions
+# secrets, so the reusable workflow's create-github-app-token step failed with
+# "private-key ... must be set to a non-empty string". That red check was then
+# propagated by gatekeeper / all-checks-passed, blocking every Dependabot PR in
+# the fleet. pull_request_target runs in the base-repo context with secrets
+# available. This workflow never checks out or executes PR code, so it is safe
+# on that trigger.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# A rebase or retry push to an open Dependabot PR fires another `synchronize`
+# run before the prior one finishes. Without this, both runs evaluate
+# auto-merge eligibility independently and the stale one can still act on an
+# outdated diff after the newer push landed.
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    uses: seankoji-com/.github/.github/workflows/reusable-dependabot-automerge.yml@main
+    with:
+      runner-json: '["ubuntu-latest"]'
+    secrets: inherit
