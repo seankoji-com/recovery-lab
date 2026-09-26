@@ -2,6 +2,7 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import gzip
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import zlib
 
 PG = "postgres:16.10-alpine"
 RESTIC = "restic/restic:0.18.1"
@@ -21,6 +23,13 @@ BROWSER = "recovery-lab-browser:0.1.0"
 LABEL = "io.recovery-lab.run"
 TITLE = "The lighthouse log"
 BODY = "The spare key is with the harbour keeper. Fixture record RL-001."
+# Adapter name -> the manifest fields it accepts besides version and adapter.
+ADAPTERS = {
+    # Custom-format pg_dump plus metadata inside an exact restic snapshot.
+    "notes-pg16": {"repository", "password_file", "snapshot"},
+    # A gzipped plain-SQL pg_dump encrypted with age (`*.sql.gz.age`).
+    "notes-pg16-sql-age": {"dump", "identity_file", "capture_started_at"},
+}
 
 
 class Failure(Exception):
@@ -45,7 +54,10 @@ def now():
 
 
 def data_age(timestamp, at=None):
-    captured = datetime.fromisoformat(timestamp)
+    try:
+        captured = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError):
+        raise Failure("capture timestamp must be ISO 8601") from None
     if captured.tzinfo is None:
         raise Failure("capture timestamp must include timezone")
     age = ((at or datetime.now(timezone.utc)) - captured).total_seconds()
@@ -56,19 +68,32 @@ def data_age(timestamp, at=None):
 
 def manifest(path):
     value = json.loads(path.read_text())
-    required = {"version", "adapter", "repository", "password_file", "snapshot"}
-    if set(value) != required or value["version"] != 1 or value["adapter"] != "notes-pg16":
-        raise Failure("expected version 1 notes-pg16 manifest with exactly the documented fields")
-    if not isinstance(value["snapshot"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["snapshot"]):
-        raise Failure("snapshot must be an exact 64-character restic snapshot ID")
-    for key in ("repository", "password_file"):
-        value[key] = (path.parent / value[key]).resolve()
-        if not value[key].exists() or "," in str(value[key]):
-            raise Failure(f"invalid {key} path")
-    if not value["repository"].is_dir() or not value["password_file"].is_file():
-        raise Failure("repository must be a directory and password_file a file")
-    if value["password_file"].stat().st_mode & 0o077:
-        raise Failure("password_file must be accessible only to its owner (chmod 600)")
+    adapter = value.get("adapter") if isinstance(value, dict) else None
+    fields = ADAPTERS.get(adapter) if isinstance(adapter, str) else None
+    if fields is None or set(value) != {"version", "adapter"} | fields or value["version"] != 1:
+        raise Failure("expected a version 1 manifest for a known adapter with exactly the documented fields")
+    if value["adapter"] == "notes-pg16":
+        if not isinstance(value["snapshot"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["snapshot"]):
+            raise Failure("snapshot must be an exact 64-character restic snapshot ID")
+        directory, key = "repository", "password_file"
+    else:
+        data_age(value["capture_started_at"])
+        directory, key = None, "identity_file"
+    for name in fields & {"repository", "password_file", "dump", "identity_file"}:
+        if not isinstance(value[name], str):
+            raise Failure(f"invalid {name} path")
+        value[name] = (path.parent / value[name]).resolve()
+        if not value[name].exists() or "," in str(value[name]):
+            raise Failure(f"invalid {name} path")
+    if directory and not value[directory].is_dir():
+        raise Failure("repository must be a directory")
+    if value["adapter"] == "notes-pg16-sql-age" and (
+            not value["dump"].is_file() or not value["dump"].name.endswith(".sql.gz.age")):
+        raise Failure("dump must be a *.sql.gz.age file")
+    if not value[key].is_file():
+        raise Failure(f"{key} must be a file")
+    if value[key].stat().st_mode & 0o077:
+        raise Failure(f"{key} must be accessible only to its owner (chmod 600)")
     return value
 
 
@@ -136,6 +161,39 @@ def restic(config, scratch, *args, output=None, readonly=True):
                   *args, output=output, timeout=300)
 
 
+def age_decrypt(config, scratch):
+    """Decrypt and decompress a *.sql.gz.age dump into the scratch directory."""
+    encrypted = Path(scratch) / "database.sql.gz"
+    with encrypted.open("wb") as stream:
+        # Host age, no network needed; stderr is captured and never exported.
+        command("age", "--decrypt", "--identity", str(config["identity_file"]), str(config["dump"]),
+                output=stream, timeout=300)
+    plain = Path(scratch) / "database.sql"
+    try:
+        with gzip.open(encrypted, "rb") as source, plain.open("wb") as target:
+            while chunk := source.read(1 << 20):
+                target.write(chunk)
+    except (OSError, EOFError, zlib.error):
+        raise Failure("decrypted dump is not valid gzip") from None
+    finally:
+        encrypted.unlink(missing_ok=True)
+    return plain
+
+
+def restore(lab, dump, adapter):
+    if adapter == "notes-pg16":
+        tool = ("pg_restore", "-U", "postgres", "-d", "notes", "--exit-on-error",
+                "--single-transaction", "--no-owner", "--no-acl")
+    else:
+        tool = ("psql", "-U", "postgres", "-d", "notes", "-X", "-q",
+                "-v", "ON_ERROR_STOP=1", "--single-transaction")
+    with dump.open("rb") as stream:
+        # stdin streams the dump; no database credentials or row data reach the receipt.
+        subprocess.run(["docker", "exec", "-i", lab.db, *tool],
+                       stdin=stream, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=True, timeout=300)
+
+
 def browser_check(lab, broken=False):
     result = docker("run", "--rm", "--label", lab.label, "--network", lab.network,
                     "--memory", "512m", "--pids-limit", "256", "--cap-drop", "ALL",
@@ -158,6 +216,35 @@ def phase(receipt, name):
         item["seconds"] = round(time.monotonic() - start, 3)
 
 
+def retrieve_restic(config, scratch, receipt):
+    metadata = json.loads(restic(config, scratch, "dump", config["snapshot"], "/work/metadata.json"))
+    if metadata["adapter"] != "notes-pg16" or metadata["postgres_major"] != 16:
+        raise Failure("backup adapter or PostgreSQL version mismatch")
+    receipt["capture_started_at"] = metadata["capture_started_at"]
+    receipt["recoverable_data_age_seconds"] = round(data_age(metadata["capture_started_at"]), 3)
+    dump = Path(scratch) / "database.dump"
+    with dump.open("wb") as stream:
+        restic(config, scratch, "dump", config["snapshot"], "/work/database.dump", output=stream)
+    with dump.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != metadata["dump_sha256"]:
+        raise Failure("dump checksum mismatch")
+    receipt["dump_sha256"] = digest
+    return dump
+
+
+def retrieve_age(config, scratch, receipt):
+    # age authenticates the ciphertext, so a wrong key or tampered file fails here.
+    with config["dump"].open("rb") as stream:
+        receipt["backup_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+    receipt["capture_started_at"] = config["capture_started_at"]
+    receipt["recoverable_data_age_seconds"] = round(data_age(config["capture_started_at"]), 3)
+    dump = age_decrypt(config, scratch)
+    with dump.open("rb") as stream:
+        receipt["dump_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return dump
+
+
 def run(path, receipt_path):
     lab = Lab()
     started = time.monotonic()
@@ -167,31 +254,18 @@ def run(path, receipt_path):
         with phase(receipt, "validate"):
             config = manifest(path)
             config["run_id"] = lab.id
-            receipt["snapshot"] = config["snapshot"]
+            receipt["adapter"] = config["adapter"]
+            if config["adapter"] == "notes-pg16":
+                receipt["snapshot"] = config["snapshot"]
         with phase(receipt, "retrieve_and_decrypt"):
-            metadata = json.loads(restic(config, scratch.name, "dump", config["snapshot"], "/work/metadata.json"))
-            if metadata["adapter"] != "notes-pg16" or metadata["postgres_major"] != 16:
-                raise Failure("backup adapter or PostgreSQL version mismatch")
-            receipt["capture_started_at"] = metadata["capture_started_at"]
-            receipt["recoverable_data_age_seconds"] = round(data_age(metadata["capture_started_at"]), 3)
-            dump = Path(scratch.name) / "database.dump"
-            with dump.open("wb") as stream:
-                restic(config, scratch.name, "dump", config["snapshot"], "/work/database.dump", output=stream)
-            with dump.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            if digest != metadata["dump_sha256"]:
-                raise Failure("dump checksum mismatch")
-            receipt["dump_sha256"] = digest
+            retrieve = retrieve_restic if config["adapter"] == "notes-pg16" else retrieve_age
+            dump = retrieve(config, scratch.name, receipt)
         with phase(receipt, "isolate"):
             lab.prepare()
-            receipt["images"] = {name: json.loads(docker("image", "inspect", name))[0]["Id"] for name in (PG, RESTIC, APP, BROWSER)}
+            images = (PG, RESTIC, APP, BROWSER) if config["adapter"] == "notes-pg16" else (PG, APP, BROWSER)
+            receipt["images"] = {name: json.loads(docker("image", "inspect", name))[0]["Id"] for name in images}
         with phase(receipt, "restore"):
-            with dump.open("rb") as stream:
-                # stdin streams the dump; no database credentials or row data reach the receipt.
-                subprocess.run(["docker", "exec", "-i", lab.db, "pg_restore", "-U", "postgres",
-                                "-d", "notes", "--exit-on-error", "--single-transaction", "--no-owner", "--no-acl"],
-                               stdin=stream, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               check=True, timeout=300)
+            restore(lab, dump, config["adapter"])
         with phase(receipt, "database_acceptance"):
             if lab.sql("SELECT count(*) FROM notes;").strip() != b"1":
                 raise Failure("expected exactly one synthetic note")

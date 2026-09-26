@@ -51,7 +51,23 @@ uv run python -m unittest discover -s tests -v
 
 Paths resolve relative to the manifest. The repository must be a local directory and the password file must be owner-only. Snapshot prefixes and `latest` are rejected. Version 1 accepts exactly these fields; it does not execute manifest commands or accept arbitrary mounts/images.
 
-The restic snapshot contains `/work/database.dump` (PostgreSQL 16 custom-format dump) and `/work/metadata.json` with `adapter`, `postgres_major`, `capture_started_at` (timezone-aware ISO 8601), and `dump_sha256`. `demo` produces the complete contract. The adapter expects the schema and synthetic record defined in the demo. Existing age-encrypted SQL files require a future adapter.
+The restic snapshot contains `/work/database.dump` (PostgreSQL 16 custom-format dump) and `/work/metadata.json` with `adapter`, `postgres_major`, `capture_started_at` (timezone-aware ISO 8601), and `dump_sha256`. `demo` produces the complete contract. The adapter expects the schema and synthetic record defined in the demo.
+
+### Age-encrypted SQL dumps
+
+The `notes-pg16-sql-age` adapter restores a gzipped plain-SQL `pg_dump` encrypted with [age](https://age-encryption.org/) (`*.sql.gz.age`). It needs the `age` CLI on the host.
+
+```json
+{
+  "version": 1,
+  "adapter": "notes-pg16-sql-age",
+  "dump": "notes-2026-09-01.sql.gz.age",
+  "identity_file": "age-identity.txt",
+  "capture_started_at": "2026-09-01T02:00:00+00:00"
+}
+```
+
+Paths resolve relative to the manifest. The dump name must end in `.sql.gz.age`, and the identity file must be owner-only. The file carries no metadata, so the operator supplies `capture_started_at` (timezone-aware ISO 8601). age authenticates the ciphertext: a wrong identity, a tampered file or a payload that is not gzip fails `retrieve_and_decrypt` before any container starts. The SQL runs through `psql` with `ON_ERROR_STOP` in a single transaction; unlike the restic adapter's `pg_restore --no-owner --no-acl`, plain SQL keeps its `OWNER TO` and `GRANT` statements, so roles they name must exist. The receipt records `backup_sha256` (the encrypted file) and `dump_sha256` (the decrypted SQL). Acceptance still expects the Recovery Notes schema and synthetic record; `demo` does not produce this format.
 
 ## What the receipt proves
 
