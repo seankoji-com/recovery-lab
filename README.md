@@ -6,6 +6,18 @@ Version 0.1 supports **Recovery Notes**, a small read-only application with one 
 
 See a [receipt from a completed local demo](examples/demo-receipt.json). CI repeats the destructive demo, replays its snapshot, and checks wrong-key and missing-snapshot failures.
 
+```mermaid
+flowchart LR
+    A["Break the sample app<br/>on purpose"] --> B["Restore the encrypted backup<br/>throwaway containers"]
+    B --> C["Check the database<br/>did the content come back?"]
+    C --> D["Open it in Chromium<br/>does the app work?"]
+    D --> E["Write the receipt<br/>timings and verified cleanup"]
+```
+
+![Recorded recovery drill receipt with database, browser and cleanup checks](docs/images/recovery-receipt.webp)
+
+<sub>A backup only counts once it has been restored. Write-up at [seankoji.com/projects/recovery-lab](https://seankoji.com/projects/recovery-lab).</sub>
+
 ## Run the destructive demo
 
 Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), and a running local Linux-container Docker engine. Tested on OrbStack; Linux CI uses Docker Engine. Image downloads and browser installation need internet access.
