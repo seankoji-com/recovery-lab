@@ -122,6 +122,33 @@ class ManifestTests(unittest.TestCase):
 
 
 class CleanupTests(unittest.TestCase):
+    def test_cleanup_attempts_siblings_after_a_removal_fails(self):
+        for failing_kind in ("container", "volume", "network"):
+            with self.subTest(kind=failing_kind):
+                remaining = ["blocked-resource", "healthy-resource"]
+                attempts = []
+                lab = cli.Lab()
+
+                def fake(*args, **kwargs):
+                    kind, operation = args[:2]
+                    if operation == "ls":
+                        self.assertEqual(args[-2:], ("--filter", f"label={lab.label}"))
+                        return "\n".join(remaining).encode() if kind == failing_kind else b""
+                    self.assertEqual(kind, failing_kind)
+                    resource = args[-1]
+                    attempts.append(resource)
+                    if resource == "blocked-resource":
+                        raise cli.Failure("synthetic removal failure")
+                    remaining.remove(resource)
+                    return b""
+
+                with patch.object(cli, "docker", side_effect=fake):
+                    result = lab.cleanup()
+                self.assertEqual(attempts, ["blocked-resource", "healthy-resource"])
+                self.assertEqual(remaining, ["blocked-resource"])
+                self.assertFalse(result[failing_kind])
+                self.assertTrue(all(result[kind] for kind in result if kind != failing_kind))
+
     def test_stopped_containers_are_included_and_removal_verified(self):
         calls = []
         def fake(*args, **kwargs):
