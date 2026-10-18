@@ -16,7 +16,7 @@ flowchart LR
 
 ![Recorded recovery drill receipt with database, browser and cleanup checks](docs/images/recovery-receipt.webp)
 
-<sub>A backup only counts once it has been restored. Write-up at [seankoji.com/projects/recovery-lab](https://seankoji.com/projects/recovery-lab).</sub>
+*A backup only counts once it has been restored. Write-up at [seankoji.com/projects/recovery-lab](https://seankoji.com/projects/recovery-lab).*
 
 ## Run the destructive demo
 
