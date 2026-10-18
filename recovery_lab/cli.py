@@ -141,11 +141,16 @@ class Lab:
             try:
                 flags = "-aq" if kind == "container" else "-q"
                 ids = docker(kind, "ls", flags, "--filter", f"label={self.label}").decode().split()
+                removal_failed = False
                 for resource in ids:
                     args = ("rm", "-f", resource) if kind == "container" else ("rm", resource)
-                    docker(kind, *args)
+                    try:
+                        docker(kind, *args)
+                    except Failure:
+                        # Still try the other resources owned by this run.
+                        removal_failed = True
                 remaining = docker(kind, "ls", flags, "--filter", f"label={self.label}").strip()
-                results[kind] = not remaining
+                results[kind] = not removal_failed and not remaining
             except Failure:
                 results[kind] = False
         return results
