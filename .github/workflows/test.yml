@@ -2,6 +2,7 @@
 name: Recovery drill
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
   # Weekly, so image, dependency and runner drift surfaces without a push.
@@ -9,6 +10,10 @@ on:
     - cron: '17 19 * * 1' # Mondays 19:17 UTC (Tuesday morning in Sydney)
 permissions:
   contents: read
+# Only superseded validations for the same PR are cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   drill:
     runs-on: ubuntu-latest
@@ -21,11 +26,56 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      # The age adapter tests encrypt synthetic fixtures with a throwaway key.
-      - run: sudo apt-get update && sudo apt-get install -y age
+      # Cache the archive, never extracted executables. Verify every cache hit.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/age-cache
+          key: age-linux-amd64-v1.3.2-cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10
+      - name: Install verified age
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = X64
+          archive="$RUNNER_TEMP/age-cache/age-v1.3.2-linux-amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/age-cache" "$RUNNER_TEMP/age-bin"
+          if [ ! -f "$archive" ]; then
+            curl --fail --location --retry 3 --output "$archive" https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          fi
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP/age-bin" --strip-components=1 age/age age/age-keygen
+          "$RUNNER_TEMP/age-bin/age" --version | grep -Fx v1.3.2
+          "$RUNNER_TEMP/age-bin/age-keygen" --version | grep -Fx v1.3.2
+          echo "$RUNNER_TEMP/age-bin" >> "$GITHUB_PATH"
       - run: uv sync --locked
+      - name: Assert age tools before tests
+        run: command -v age && command -v age-keygen && test "$(age --version)" = v1.3.2 && test "$(age-keygen --version)" = v1.3.2
       - run: uv run python -m unittest discover -s tests -v
-      - run: uv run recovery-lab build
+      # Pull the exact runtime tags used by the local build command.
+      - name: Pull runtime images
+        run: |
+          uv run python -c 'from recovery_lab.cli import PG, RESTIC, docker; docker("pull", PG, timeout=600); docker("pull", RESTIC, timeout=600)'
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # Rebuild and load both images from this checkout. Pull refreshes base
+      # tags and invalidates dependent layers when their digest changes.
+      # Only trusted main pushes publish shared caches; PRs read or build cold.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./recovery_lab/app
+          file: ./recovery_lab/app/Dockerfile
+          tags: recovery-lab-notes:0.1.0
+          load: true
+          pull: true
+          cache-from: type=gha,scope=notes-linux-amd64
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,scope=notes-linux-amd64,mode=max' || '' }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./recovery_lab/app
+          file: ./recovery_lab/app/browser.Dockerfile
+          tags: recovery-lab-browser:0.1.0
+          load: true
+          pull: true
+          cache-from: type=gha,scope=browser-linux-amd64
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,scope=browser-linux-amd64,mode=max' || '' }}
       - run: uv run recovery-lab demo
       - run: uv run recovery-lab run .demo/manifest.json --receipt receipts/replay.json
       - run: uv run python tests/failure_drill.py
