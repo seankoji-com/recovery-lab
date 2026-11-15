@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: seed-buildkit-cache
+  cancel-in-progress: false
+env:
+  DOCKER_BUILD_RECORD_UPLOAD: 'false'
 jobs:
   seed:
     if: github.repository == 'seankoji-com/recovery-lab' && github.ref == 'refs/heads/main'
@@ -49,6 +54,7 @@ jobs:
           file: ./recovery_lab/app/Dockerfile
           platforms: linux/amd64
           pull: true
+          load: true
           cache-from: type=gha,scope=notes-linux-amd64
       - name: Import browser on a fresh builder
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -57,4 +63,5 @@ jobs:
           file: ./recovery_lab/app/browser.Dockerfile
           platforms: linux/amd64
           pull: true
+          load: true
           cache-from: type=gha,scope=browser-linux-amd64
