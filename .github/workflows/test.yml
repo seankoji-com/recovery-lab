@@ -28,7 +28,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       # Cache the archive, never extracted executables. Verify every cache hit.
       # Digest recorded from the upstream GitHub release asset API for v1.3.2.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/age-cache
           key: age-linux-amd64-v1.3.2-cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10
@@ -57,26 +57,29 @@ jobs:
         run: |
           uv run python -c 'from recovery_lab.cli import PG, RESTIC, docker; docker("pull", PG, timeout=600); docker("pull", RESTIC, timeout=600)'
           uv run python -c 'from recovery_lab.cli import APP, BROWSER; print(f"app={APP}\nbrowser={BROWSER}")' >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Rebuild and load both images from this checkout. Pull refreshes base
       # tags and invalidates dependent layers when their digest changes.
       # Only trusted main pushes publish shared caches; PRs read or build cold.
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      # Scheduled drills rebuild dependencies to detect upstream drift.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./recovery_lab/app
           file: ./recovery_lab/app/Dockerfile
           tags: ${{ steps.images.outputs.app }}
           load: true
           pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
           cache-from: type=gha,scope=notes-linux-amd64
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,scope=notes-linux-amd64,mode=max' || '' }}
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./recovery_lab/app
           file: ./recovery_lab/app/browser.Dockerfile
           tags: ${{ steps.images.outputs.browser }}
           load: true
           pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
           cache-from: type=gha,scope=browser-linux-amd64
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,scope=browser-linux-amd64,mode=max' || '' }}
       - run: uv run recovery-lab demo
