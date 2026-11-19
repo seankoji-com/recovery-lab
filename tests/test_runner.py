@@ -13,6 +13,20 @@ from unittest.mock import patch
 from recovery_lab import cli
 
 
+class BuildTests(unittest.TestCase):
+    def test_build_pulls_runtime_images_and_builds_both_application_images(self):
+        # Exercise the documented local command without invoking the host daemon.
+        with patch.object(cli, "docker") as docker:
+            cli.build()
+        calls = docker.call_args_list
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([call.args[:2] for call in calls[:2]],
+                         [("pull", cli.PG), ("pull", cli.RESTIC)])
+        self.assertEqual([call.args[2] for call in calls[2:]], [cli.APP, cli.BROWSER])
+        self.assertTrue(all(call.args[0:2] == ("build", "-t") for call in calls[2:]))
+        self.assertIn("browser.Dockerfile", calls[3].args[-2])
+
+
 class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
